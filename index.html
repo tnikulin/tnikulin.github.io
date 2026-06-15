@@ -488,13 +488,24 @@
       color: #fff;
     }
     .chip-hotel.active:hover { background: var(--hotel-frame); }
-    /* Активный якорь сортировки — постоянно «горит», клик снимает */
-    .chip-anchor {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: var(--on-accent);
+    /* Сброс активного якоря — нейтральная кнопка (как «Сбросить»), не «выбранный фильтр».
+       Показывается только когда якорь задан (атрибут hidden снимается из JS). */
+    .chip-anchor-clear {
+      background: transparent;
+      border-color: var(--fg-mute);
+      color: var(--fg-mute);
+      font-size: var(--fs-sm);
     }
-    .chip-anchor:hover { background: var(--accent); }
+    .chip-anchor-clear:hover { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+    /* Длинное название якоря обрезаем многоточием, кнопку не растягиваем */
+    #anchor-label {
+      display: inline-block;
+      max-width: 16ch;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: bottom;
+    }
     .filter-status {
       font-size: var(--fs-sm);
       color: var(--fg-mute);
@@ -1490,10 +1501,10 @@
                     <span class="filter-label">Тема</span>
                 </div>
                 <div class="filter-row" data-group="anchor">
-                    <span class="filter-label">Сортировать по удалённости</span>
-                    <button type="button" class="chip" id="anchor-geo">📍 Я здесь</button>
-                    <button type="button" class="chip" id="anchor-pick">Указать точку…</button>
-                    <button type="button" class="chip chip-anchor" id="anchor-clear" hidden>✕ от <span id="anchor-label"></span></button>
+                    <span class="filter-label">Сортировать по удалённости от</span>
+                    <button type="button" class="chip" id="anchor-geo">📍 Моих координат</button>
+                    <button type="button" class="chip" id="anchor-pick">Указанной точки…</button>
+                    <button type="button" class="chip chip-anchor-clear" id="anchor-clear" hidden>✕ Очистить сортировку от <span id="anchor-label"></span></button>
                 </div>
                 <div class="filter-row" data-group="flag">
                     <span class="filter-label">Флаги</span>
@@ -1997,7 +2008,7 @@
           html.push(`
             <div class="places-group" data-location-group="${esc(loc.key)}">
               <h3 class="group-title" id="catalog-${esc(loc.key)}" style="border-bottom-color:${esc(loc.color)}">${esc(loc.label)} <span class="meta">· ${places.length}</span></h3>
-              ${places.map(renderPlace).join('')}
+              ${places.map(p => renderPlace(p)).join('')}
             </div>
           `);
         });
@@ -2175,7 +2186,7 @@
         }).then(v => {
           if (!v) return;
           const c = parseCoords(v.coords);
-          if (c) setAnchor({ lat: c[0], lng: c[1], label: 'указанной точки' });
+          if (c) setAnchor({ lat: c[0], lng: c[1], label: c[0].toFixed(5) + ', ' + c[1].toFixed(5) });
         });
       }
 
@@ -2184,7 +2195,7 @@
         if (geo) {
           geo.addEventListener('click', () => {
             locateMe(
-              c => setAnchor({ lat: c[0], lng: c[1], label: 'моего местоположения' }),
+              c => setAnchor({ lat: c[0], lng: c[1], label: c[0].toFixed(5) + ', ' + c[1].toFixed(5) }),
               msg => modalAlert('Геолокация', msg),
               geo
             );
