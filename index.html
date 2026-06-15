@@ -1332,6 +1332,29 @@ section {
 .modal-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 textarea.modal-input { resize: vertical; line-height: 1.4; }
 
+/* Поле с кнопкой-действием (напр. «текущие координаты»). */
+.modal-field-row { display: flex; gap: 8px; align-items: stretch; }
+.modal-field-row .modal-input { flex: 1 1 auto; min-width: 0; }
+.modal-field-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  padding: 0 14px;
+  min-height: 44px;
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  color: var(--fg);
+  cursor: pointer;
+}
+.modal-field-btn:hover { background: var(--accent-soft); }
+.modal-field-btn:disabled { opacity: 0.6; cursor: default; }
+
 .modal-error {
   color: var(--trap);
   font-size: var(--fs-sm);
@@ -2148,10 +2171,18 @@ const BUILD_DATE = "2026-06-15";
         const attrs = f.multiline
           ? `rows="${f.rows || 2}"`
           : `type="text" inputmode="${esc(f.inputmode || 'text')}"`;
+        const inputHtml = `<${tag} id="${id}" class="modal-input" ${attrs} placeholder="${esc(f.placeholder || '')}"></${tag}>`;
+        // Опц. кнопка-действие у поля (напр. «текущие координаты»).
+        const btnHtml = f.button
+          ? `<button type="button" class="modal-field-btn" data-fieldbtn="${i}">${esc(f.button)}</button>`
+          : '';
+        const control = btnHtml
+          ? `<div class="modal-field-row">${inputHtml}${btnHtml}</div>`
+          : inputHtml;
         return `
           <div class="modal-field">
             ${f.label ? `<label for="${id}">${esc(f.label)}</label>` : ''}
-            <${tag} id="${id}" class="modal-input" ${attrs} placeholder="${esc(f.placeholder || '')}"></${tag}>
+            ${control}
           </div>`;
       }).join('');
 
@@ -2174,6 +2205,27 @@ const BUILD_DATE = "2026-06-15";
       });
 
       const errEl = back.querySelector('#modal-error');
+
+      // Кнопки-действия у полей: отдаём обработчику доступ к полю и строке ошибки.
+      fields.forEach((f, i) => {
+        if (!f.onButton) return;
+        const btn = back.querySelector('[data-fieldbtn="' + i + '"]');
+        const input = back.querySelector('#modal-f-' + i);
+        if (!btn || !input) return;
+        btn.addEventListener('click', () => {
+          f.onButton({
+            button: btn,
+            input: input,
+            setValue: v => { input.value = v == null ? '' : String(v); },
+            setError: msg => {
+              if (!errEl) return;
+              errEl.textContent = msg || '';
+              errEl.hidden = !msg;
+            },
+          });
+        });
+      });
+
       modalPrevFocus = document.activeElement;
       back.hidden = false;
       requestAnimationFrame(() => back.classList.add('show'));
@@ -3062,12 +3114,46 @@ const BUILD_DATE = "2026-06-15";
     return [nums[0], nums[1]];
   }
 
+  // Подставляет текущие координаты из браузера в поле «координаты».
+  // Браузер сам спросит разрешение; требуется защищённый контекст (https/localhost).
+  function fillCurrentLocation(api) {
+    if (!navigator.geolocation) {
+      api.setError('Геолокация не поддерживается этим браузером.');
+      return;
+    }
+    const btn = api.button;
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '…';
+    api.setError('');
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        btn.disabled = false;
+        btn.textContent = orig;
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        api.setValue(lat.toFixed(6) + ', ' + lon.toFixed(6));
+        api.input.focus();
+      },
+      err => {
+        btn.disabled = false;
+        btn.textContent = orig;
+        let msg = 'Не удалось определить местоположение.';
+        if (err && err.code === 1) msg = 'Доступ к геолокации запрещён — разрешите его в настройках браузера и повторите.';
+        else if (err && err.code === 2) msg = 'Местоположение недоступно. Проверьте GPS / интернет.';
+        else if (err && err.code === 3) msg = 'Истекло время ожидания. Попробуйте ещё раз.';
+        api.setError(msg);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  }
+
   async function doAddCustom() {
     const res = await openModal({
       title: 'Своя точка',
-      body: 'Вставьте координаты как есть из Google / Яндекс Карт.',
+      body: 'Вставьте координаты из Google / Яндекс Карт или нажмите «📍 Я здесь», чтобы взять текущие из браузера.',
       fields: [
-        { key: 'coords', label: 'Координаты (широта, долгота)', placeholder: '40.1812, 44.5145', inputmode: 'decimal' },
+        { key: 'coords', label: 'Координаты (широта, долгота)', placeholder: '40.1812, 44.5145', inputmode: 'decimal', button: '📍 Я здесь', onButton: fillCurrentLocation },
         { key: 'name', label: 'Название / описание', value: 'Своя точка' },
       ],
       confirmLabel: 'Добавить',
