@@ -488,6 +488,13 @@
       color: #fff;
     }
     .chip-hotel.active:hover { background: var(--hotel-frame); }
+    /* Активный якорь сортировки — постоянно «горит», клик снимает */
+    .chip-anchor {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--on-accent);
+    }
+    .chip-anchor:hover { background: var(--accent); }
     .filter-status {
       font-size: var(--fs-sm);
       color: var(--fg-mute);
@@ -563,6 +570,18 @@
       font-weight: 400;
       color: var(--fg-mute);
       font-size: 0.82em;
+    }
+    /* Бейдж расстояния от якоря (режим сортировки по удалённости) */
+    .place-dist {
+      flex: 0 0 auto;
+      align-self: flex-start;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-radius: var(--r-pill);
+      padding: 2px 9px;
+      font-size: var(--fs-xs);
+      font-weight: 600;
+      white-space: nowrap;
     }
 
     /* Компас-виджет: направление и расстояние точки от центра города.
@@ -892,6 +911,21 @@
       min-height: var(--tap);
     }
     .route-add-btn:hover { background: var(--accent); color: var(--on-accent); }
+    /* «📍 отсюда» — вторичная кнопка рядом с «В маршрут» */
+    .anchor-from-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: 8px;
+      background: transparent;
+      border: 1px solid var(--line);
+      color: var(--fg-mute);
+      border-radius: var(--r-pill);
+      padding: 7px 12px;
+      font-size: var(--fs-sm);
+      min-height: var(--tap);
+    }
+    .anchor-from-btn:hover { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
     .route-add-btn.added {
       background: var(--ok-bg);
       border-color: var(--ok);
@@ -1455,6 +1489,12 @@
                 <div class="filter-row" data-group="theme">
                     <span class="filter-label">Тема</span>
                 </div>
+                <div class="filter-row" data-group="anchor">
+                    <span class="filter-label">Сортировать по удалённости</span>
+                    <button type="button" class="chip" id="anchor-geo">📍 Я здесь</button>
+                    <button type="button" class="chip" id="anchor-pick">Указать точку…</button>
+                    <button type="button" class="chip chip-anchor" id="anchor-clear" hidden>✕ от <span id="anchor-label"></span></button>
+                </div>
                 <div class="filter-row" data-group="flag">
                     <span class="filter-label">Флаги</span>
                     <button type="button" class="chip chip-hotel" data-flag="hotel">Мои отели</button>
@@ -1802,7 +1842,7 @@
         return out.join('');
       }
 
-      function renderPlace(p) {
+      function renderPlace(p, dist) {
         const loc = locByKey[p.location];
         const locColor = loc ? loc.color : '#888';
         const themeLabels = (p.themes || [])
@@ -1889,6 +1929,7 @@
           <article class="${articleClass}" id="place-${esc(p.id)}" ${dataAttrs}${styleAttr}>
             <div class="place-head">
               <h3>${namesLine}</h3>
+              ${dist != null ? `<span class="place-dist" title="Расстояние по прямой от точки отсчёта">📍 ${esc(formatDist(dist))}</span>` : ''}
             </div>
             <div class="place-type">${p.subLocation ? esc(p.subLocation) + ' · ' : ''}${esc(p.type)}${themeLabels ? ' · ' + themeLabels : ''}</div>
             <div class="badges">${buildBadges(p)}</div>
@@ -1922,6 +1963,25 @@
       function renderCatalog() {
         const list = $('#catalog-list');
         const totalEl = $('#catalog-total');
+
+        // Режим «по удалённости»: единый плоский список, отсортированный по
+        // расстоянию по прямой от якорной точки. Локации НЕ группируем —
+        // ближайшее всплывает первым (а т.к. города географически разнесены,
+        // тот город, где вы стоите, естественно оказывается сверху).
+        if (state.anchor) {
+          const a = [state.anchor.lat, state.anchor.lng];
+          const ranked = PLACES
+            .filter(p => p.coords)
+            .map(p => ({ p, d: haversine(a, p.coords) }))
+            .sort((x, y) => x.d - y.d);
+          list.innerHTML = `
+            <div class="places-group" data-sorted-by-distance="true">
+              <h3 class="group-title">📍 По удалённости — от ${esc(state.anchor.label)} <span class="meta">· ${ranked.length}</span></h3>
+              ${ranked.map(({ p, d }) => renderPlace(p, d)).join('')}
+            </div>`;
+          totalEl.textContent = PLACES.length;
+          return;
+        }
 
         // Группируем по локациям в порядке LOCATIONS
         const html = [];
@@ -1958,7 +2018,19 @@
         plan: false,             // из оригинального плана
         hotel: false,            // мои отели
         search: '',
+        anchor: null,            // {lat, lng, label} — если задано, каталог сортируется по удалённости
       };
+
+      // Парсит строку «широта, долгота» → [lat, lng] | null. Допускает запятую,
+      // точку с запятой или пробел как разделитель; проверяет диапазоны.
+      function parseCoords(s) {
+        if (!s) return null;
+        const m = String(s).trim().match(/^(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)$/);
+        if (!m) return null;
+        const lat = parseFloat(m[1]), lng = parseFloat(m[2]);
+        if (!(lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180)) return null;
+        return [lat, lng];
+      }
 
       function buildFilterChips() {
         // Локации
@@ -2020,7 +2092,13 @@
           state.plan = false;
           state.hotel = false;
           $$('.chip.active').forEach(b => b.classList.remove('active'));
-          applyFilters();
+          if (state.anchor) {
+            // Сброс якоря перерисовывает каталог (плоский → сгруппированный)
+            // и сам зовёт applyFilters() — отдельный вызов ниже не нужен.
+            setAnchor(null);
+          } else {
+            applyFilters();
+          }
         });
 
         // Сворачиваемые фильтры на мобильном (на >=980px CSS их всё равно держит открытыми).
@@ -2035,11 +2113,106 @@
         }
       }
 
+      // ---- Якорь сортировки по удалённости ------------------------------
+
+      // Синхронизирует чип-индикатор активного якоря с состоянием.
+      function updateAnchorChip() {
+        const chip = $('#anchor-clear');
+        if (!chip) return;
+        chip.hidden = !state.anchor;
+        const lbl = $('#anchor-label');
+        if (lbl) lbl.textContent = state.anchor ? state.anchor.label : '';
+      }
+
+      // Устанавливает (или снимает, при null) якорь и перерисовывает каталог:
+      // плоский список по удалённости ↔ группировка по локациям. Сохраняет
+      // активные фильтры (applyFilters прогоняется по свежим карточкам).
+      function setAnchor(anchor) {
+        state.anchor = anchor || null;
+        updateAnchorChip();
+        renderCatalog();
+        refreshAddButtons();
+        applyFilters();
+        if (anchor) {
+          const cat = document.getElementById('catalog');
+          if (cat) cat.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }
+
+      // Геолокация браузера → колбэки. btn (опц.) блокируется на время запроса.
+      function locateMe(onOk, onErr, btn) {
+        if (!navigator.geolocation) { onErr('Браузер не поддерживает геолокацию.'); return; }
+        let orig;
+        if (btn) { orig = btn.textContent; btn.disabled = true; btn.textContent = '📍 …'; }
+        const restore = () => { if (btn) { btn.disabled = false; btn.textContent = orig; } };
+        navigator.geolocation.getCurrentPosition(
+          pos => { restore(); onOk([pos.coords.latitude, pos.coords.longitude]); },
+          err => { restore(); onErr('Не удалось определить местоположение: ' + (err && err.message || 'отказано')); },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+        );
+      }
+
+      // Диалог ручного ввода якоря: координаты «широта, долгота» либо кнопка
+      // «моё местоположение», которая подставляет их в поле.
+      function promptAnchor() {
+        openModal({
+          title: 'Сортировать по удалённости',
+          body: 'Точка отсчёта: координаты в формате «широта, долгота» — или возьмите текущее местоположение.',
+          fields: [{
+            key: 'coords', label: 'Координаты', placeholder: '40.17763, 44.51261', inputmode: 'decimal',
+            button: '📍 моё местоположение',
+            onButton: ({ setValue, setError, button }) => {
+              setError('');
+              locateMe(
+                c => setValue(c[0].toFixed(5) + ', ' + c[1].toFixed(5)),
+                msg => setError(msg),
+                button
+              );
+            },
+          }],
+          confirmLabel: 'Сортировать',
+          validate: v => parseCoords(v.coords) ? null : 'Введите координаты в формате «широта, долгота».',
+        }).then(v => {
+          if (!v) return;
+          const c = parseCoords(v.coords);
+          if (c) setAnchor({ lat: c[0], lng: c[1], label: 'указанной точки' });
+        });
+      }
+
+      function setupAnchor() {
+        const geo = $('#anchor-geo');
+        if (geo) {
+          geo.addEventListener('click', () => {
+            locateMe(
+              c => setAnchor({ lat: c[0], lng: c[1], label: 'моего местоположения' }),
+              msg => modalAlert('Геолокация', msg),
+              geo
+            );
+          });
+        }
+        const pick = $('#anchor-pick');
+        if (pick) pick.addEventListener('click', promptAnchor);
+
+        const clear = $('#anchor-clear');
+        if (clear) clear.addEventListener('click', () => setAnchor(null));
+
+        // «📍 отсюда» на карточке — сортировать каталог от этой точки.
+        document.addEventListener('click', e => {
+          const btn = e.target.closest('[data-anchor-from]');
+          if (!btn) return;
+          const p = placeById[btn.getAttribute('data-anchor-from')];
+          if (p && p.coords) setAnchor({ lat: p.coords[0], lng: p.coords[1], label: p.name });
+        });
+
+        updateAnchorChip();
+      }
+
       function countActiveFilters() {
         let n = state.locations.size + state.themes.size;
         ['key', 'exact', 'open', 'plan', 'hotel'].forEach(k => {
           if (state[k]) n++;
         });
+        if (state.anchor) n++;
         if (state.search && state.search.trim()) n++;
         return n;
       }
@@ -2867,6 +3040,8 @@
           '<button type="button" class="route-add-btn' + (inList ? ' added' : '') + '" ' +
           'data-route-add="' + esc(p.id) + '">' +
           (inList ? 'В маршруте' : 'В маршрут') + '</button>' +
+          '<button type="button" class="anchor-from-btn" data-anchor-from="' + esc(p.id) + '" ' +
+          'title="Сортировать каталог по удалённости от этой точки">📍 отсюда</button>' +
           compassWidget(p) + '</div>';
       }
 
@@ -3711,6 +3886,7 @@
         try {
           renderCatalog();
           buildFilterChips();
+          setupAnchor();
           applyFilters();
           setupSearch();
           setupCopyButtons();
